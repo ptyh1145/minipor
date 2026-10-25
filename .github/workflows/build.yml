@@ -1,0 +1,74 @@
+name: build
+
+# 在自托管 runner（自己的电脑）上构建。
+# 输入文件留在本机磁盘，工作流只读取路径；产物写回本机目录，不上传任何输入。
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "本机路径：基础包（zip/ipa）"
+        required: true
+        default: "H:\\inputs\\base.pkg"
+      assets:
+        description: "本机路径：来源资源目录（含 assets/）"
+        required: true
+        default: "H:\\inputs\\assets"
+      out_dir:
+        description: "本机输出目录"
+        required: true
+        default: "H:\\output"
+      overlay:
+        description: "附加：none | sound | tex"
+        required: true
+        default: "none"
+  push:
+    branches: [main]
+    paths: ["tools/**"]
+
+jobs:
+  build:
+    # 需要先在这台机器上注册 runner，标签保持默认（self-hosted / Windows / X64）
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check inputs exist locally
+        shell: pwsh
+        run: |
+          $base   = "${{ inputs.base }}"
+          $assets = "${{ inputs.assets }}"
+          if (-not (Test-Path $base))   { throw "base package not found: $base" }
+          if (-not (Test-Path $assets)) { throw "asset tree not found: $assets" }
+          Write-Host "base   : $base"
+          Write-Host "assets : $assets"
+          (Get-ChildItem -Recurse -File $assets | Measure-Object).Count
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $out = "${{ inputs.out_dir }}"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $target = Join-Path $out "output.pkg"
+          switch ("${{ inputs.overlay }}") {
+            "sound" {
+              python tools/table_merge.py "${{ inputs.base }}" "${{ inputs.assets }}" $target --overlay-art --art-ext ogg
+            }
+            "tex" {
+              python tools/table_merge.py "${{ inputs.base }}" "${{ inputs.assets }}" $target --overlay-art
+            }
+            default {
+              python tools/build_package.py --ipa "${{ inputs.base }}" --assets "${{ inputs.assets }}" --out $target
+            }
+          }
+          if (-not (Test-Path $target)) { throw "build produced nothing" }
+          Write-Host ("done: {0} ({1:N1} MB)" -f $target, ((Get-Item $target).Length / 1MB))
+
+      - name: Trim old builds (keep last 2)
+        shell: pwsh
+        run: |
+          $out = "${{ inputs.out_dir }}"
+          Get-ChildItem $out -Filter "*.pkg" | Sort-Object LastWriteTime -Descending |
+            Select-Object -Skip 2 | Remove-Item -Force -ErrorAction SilentlyContinue
+
+      # 不上传产物：输出留在本机 out_dir，避免把受版权保护的内容传到任何服务器

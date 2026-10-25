@@ -1,4 +1,4 @@
-# asset-tools
+﻿# asset-tools
 
 命令行工具，用于读写某款体素沙盒游戏的资源文件（本地研究用途）。
 
@@ -43,3 +43,28 @@ Python 3.10+，仅标准库（zlib / zipfile / struct）。
 ## 许可
 
 仅供本地学习与互操作研究。使用者需自行确保对输入文件拥有合法使用权。
+
+## 在自己的机器上构建（self-hosted runner）
+
+输入文件留在本机，工作流只读路径，产物也写回本机，不上传任何来源文件。
+
+1. 注册 runner（一次性）：
+
+```powershell
+# 仓库 Settings -> Actions -> Runners -> New self-hosted runner 复制命令，形如：
+mkdir C:\actions-runner; cd C:\actions-runner
+Invoke-WebRequest -Uri https://github.com/actions/runner/releases/download/v2.x/actions-runner-win-x64-2.x.zip -OutFile runner.zip
+Expand-Archive runner.zip -DestinationPath .
+.\config.cmd --url https://github.com/<owner>/<repo> --token <TOKEN>
+.\run.cmd
+```
+
+2. 跑构建：Actions -> build -> Run workflow，填三个本机路径：
+
+| 参数 | 例子 |
+|---|---|
+| `base` | `H:\inputs\base.pkg` |
+| `assets` | `H:\inputs\assets` |
+| `out_dir` | `H:\output` |
+
+3. 产物：`H:\output\output.pkg`（保留最近 2 个）
