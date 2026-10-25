@@ -1,0 +1,9 @@
+﻿*.pkg
+*.ipa
+*.apk
+assets/
+old/
+in/
+output/
+__pycache__/
+*.pyc
