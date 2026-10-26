@@ -304,30 +304,52 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }  // namespace
 #endif
 
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        printf("usage: %s <assets.bin> [--shot out.bmp [x y z yaw pitch]]\n", argv[0]);
-        return 2;
+static std::string resolveAssetPath(int argc, char **argv) {
+    if (argc >= 2 && argv[1][0] != '-') return std::string(argv[1]);
+#ifdef _WIN32
+    // no argument: look next to the executable, then the working directory
+    char module[MAX_PATH] = {0};
+    if (GetModuleFileNameA(nullptr, module, MAX_PATH)) {
+        std::string dir(module);
+        const std::size_t slash = dir.find_last_of("\\/");
+        if (slash != std::string::npos) {
+            const std::string beside = dir.substr(0, slash + 1) + "assets.bin";
+            if (FILE *fh = fopen(beside.c_str(), "rb")) { fclose(fh); return beside; }
+        }
     }
+#endif
+    return std::string("assets.bin");
+}
+
+int main(int argc, char **argv) {
+    const std::string assetPath = resolveAssetPath(argc, argv);
     Assets assets;
-    if (!loadAssets(argv[1], assets)) return 1;
+    if (!loadAssets(assetPath.c_str(), assets)) {
+#ifdef _WIN32
+        MessageBoxA(nullptr, ("找不到或无法读取资源文件:\n" + assetPath +
+                              "\n\n请把 assets.bin 放到 play.exe 旁边。").c_str(),
+                    "voxel preview", MB_ICONERROR);
+#endif
+        return 1;
+    }
+    const int argShift = (argc >= 2 && argv[1][0] != '-') ? 1 : 0;
 
     Screen screen;
     screen.rgba.resize((size_t)kWidth * kHeight * 4);
     screen.depth.resize((size_t)kWidth * kHeight);
 
-    if (argc >= 4 && std::string(argv[2]) == "--shot") {
+    if (argc >= 3 + argShift && std::string(argv[1 + argShift]) == "--shot") {
         Camera cam = spawnCamera(assets);
-        if (argc >= 9) {
-            cam.x = (float)atof(argv[4]);
-            cam.y = (float)atof(argv[5]);
-            cam.z = (float)atof(argv[6]);
-            cam.yaw = (float)atof(argv[7]);
-            cam.pitch = (float)atof(argv[8]);
+        if (argc >= 8 + argShift) {
+            cam.x = (float)atof(argv[3 + argShift]);
+            cam.y = (float)atof(argv[4 + argShift]);
+            cam.z = (float)atof(argv[5 + argShift]);
+            cam.yaw = (float)atof(argv[6 + argShift]);
+            cam.pitch = (float)atof(argv[7 + argShift]);
         }
         renderFrame(assets, cam, screen);
-        if (!saveBmp(argv[3], screen)) { printf("cannot write bmp\n"); return 1; }
-        printf("wrote %s (camera %.1f %.1f %.1f yaw %.2f pitch %.2f)\n", argv[3], cam.x, cam.y, cam.z,
+        if (!saveBmp(argv[2 + argShift], screen)) { printf("cannot write bmp\n"); return 1; }
+        printf("wrote %s (camera %.1f %.1f %.1f yaw %.2f pitch %.2f)\n", argv[2 + argShift], cam.x, cam.y, cam.z,
                cam.yaw, cam.pitch);
         return 0;
     }
