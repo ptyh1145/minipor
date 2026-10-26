@@ -22,9 +22,6 @@ on:
         description: "附加：none | sound | tex"
         required: true
         default: "none"
-  push:
-    branches: [main]
-    paths: ["tools/**"]
 
 jobs:
   build:
