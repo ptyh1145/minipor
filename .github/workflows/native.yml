@@ -1,0 +1,36 @@
+name: native
+
+# 编译 C++ 预览渲染器（无第三方依赖），产出 Windows 可执行文件。
+# 资源在运行时由本地提供，构建过程不接触任何游戏文件。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "native/**"
+      - ".github/workflows/native.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S native -B build-native -A x64
+
+      - name: Build
+        run: cmake --build build-native --config Release
+
+      - name: Smoke test (usage message)
+        run: |
+          .\build-native\Release\preview.exe
+          if ($LASTEXITCODE -ne 2) { throw "unexpected exit code $LASTEXITCODE" }
+        shell: powershell
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-native
+          path: build-native/Release/preview.exe
+          if-no-files-found: error
