@@ -12,7 +12,9 @@ else()
 endif()
 
 # host-side validation of the shared terrain code (same sources the app uses)
-add_executable(terrain_check terrain_check.cpp ../ios/core/src/terrain.cpp)
+add_executable(terrain_check terrain_check.cpp
+    ../ios/core/src/terrain.cpp
+    ../ios/core/src/assets_bin.cpp)
 target_include_directories(terrain_check PRIVATE ../ios/core/include)
 if (MSVC)
     target_compile_options(terrain_check PRIVATE /O2 /w)
