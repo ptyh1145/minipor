@@ -1,4 +1,4 @@
-﻿name: build
+name: build
 
 # 在自托管 runner（自己的电脑）上构建。
 # 输入文件留在本机磁盘，工作流只读取路径；产物写回本机目录，不上传任何输入。
@@ -8,25 +8,32 @@ on:
     inputs:
       base:
         description: "本机路径：基础包（zip/pkg）"
-        required: true
+        required: false
         default: "H:\\inputs\\base.pkg"
       assets:
         description: "本机路径：来源资源目录（含 assets/）"
-        required: true
+        required: false
         default: "H:\\inputs\\assets"
       out_dir:
         description: "本机输出目录"
-        required: true
+        required: false
         default: "H:\\output"
       overlay:
         description: "附加：none | sound | tex"
-        required: true
+        required: false
         default: "none"
   push:
     branches: [main]
     paths:
       - "tools/**"
       - ".github/workflows/build.yml"
+
+env:
+  # push 触发时 inputs 为空，这里给出默认值
+  MW_BASE: ${{ inputs.base || 'H:\inputs\base.pkg' }}
+  MW_ASSETS: ${{ inputs.assets || 'H:\inputs\assets' }}
+  MW_OUT: ${{ inputs.out_dir || 'H:\output' }}
+  MW_OVERLAY: ${{ inputs.overlay || 'none' }}
 
 jobs:
   build:
@@ -38,29 +45,28 @@ jobs:
       - name: Check inputs exist locally
         shell: powershell
         run: |
-          $base   = "${{ inputs.base }}"
-          $assets = "${{ inputs.assets }}"
-          if (-not (Test-Path $base))   { throw "base package not found: $base" }
-          if (-not (Test-Path $assets)) { throw "asset tree not found: $assets" }
-          Write-Host "base   : $base"
-          Write-Host "assets : $assets"
-          (Get-ChildItem -Recurse -File $assets | Measure-Object).Count
+          Write-Host "base    : $env:MW_BASE"
+          Write-Host "assets  : $env:MW_ASSETS"
+          Write-Host "out     : $env:MW_OUT"
+          Write-Host "overlay : $env:MW_OVERLAY"
+          if (-not (Test-Path $env:MW_BASE))   { throw "base package not found: $env:MW_BASE" }
+          if (-not (Test-Path $env:MW_ASSETS)) { throw "asset tree not found: $env:MW_ASSETS" }
+          "asset files: " + (Get-ChildItem -Recurse -File $env:MW_ASSETS | Measure-Object).Count
 
       - name: Build
         shell: powershell
         run: |
-          $out = "${{ inputs.out_dir }}"
-          New-Item -ItemType Directory -Path $out -Force | Out-Null
-          $target = Join-Path $out "output.pkg"
-          switch ("${{ inputs.overlay }}") {
+          New-Item -ItemType Directory -Path $env:MW_OUT -Force | Out-Null
+          $target = Join-Path $env:MW_OUT "output.pkg"
+          switch ($env:MW_OVERLAY) {
             "sound" {
-              python tools/table_merge.py "${{ inputs.base }}" "${{ inputs.assets }}" $target --overlay-art --art-ext ogg
+              python tools/table_merge.py $env:MW_BASE $env:MW_ASSETS $target --overlay-art --art-ext ogg
             }
             "tex" {
-              python tools/table_merge.py "${{ inputs.base }}" "${{ inputs.assets }}" $target --overlay-art
+              python tools/table_merge.py $env:MW_BASE $env:MW_ASSETS $target --overlay-art
             }
             default {
-              python tools/build_package.py --base "${{ inputs.base }}" --assets "${{ inputs.assets }}" --out $target
+              python tools/build_package.py --base $env:MW_BASE --assets $env:MW_ASSETS --out $target
             }
           }
           if (-not (Test-Path $target)) { throw "build produced nothing" }
@@ -69,8 +75,7 @@ jobs:
       - name: Trim old builds (keep last 2)
         shell: powershell
         run: |
-          $out = "${{ inputs.out_dir }}"
-          Get-ChildItem $out -Filter "*.pkg" | Sort-Object LastWriteTime -Descending |
+          Get-ChildItem $env:MW_OUT -Filter "*.pkg" | Sort-Object LastWriteTime -Descending |
             Select-Object -Skip 2 | Remove-Item -Force -ErrorAction SilentlyContinue
 
       # 不上传产物：输出留在本机 out_dir，避免把受版权保护的内容传到任何服务器
