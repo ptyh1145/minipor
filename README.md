@@ -21,7 +21,7 @@ python tools/read_assets.py <pack> <entry> -o out.txt
 python tools/table_merge.py <base.pkg> <old/assets> <output.pkg>
 
 # 端到端：合并数据表 -> 重建资源包 -> 输出新包（含自检）
-python tools/build_package.py --ipa <base.pkg> --assets <old/assets> --out output.pkg
+python tools/build_package.py --base <base.pkg> --assets <old/assets> --out output.pkg
 
 # 网格文件转 OBJ（便于在建模软件里查看）
 python tools/model_to_obj.py <input.omod> <out.obj>

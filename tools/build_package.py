@@ -6,11 +6,11 @@ Pipeline (the reason this repo exists):
     data   = old/assets          (source tables / models / textures / worlds)
     steps  = 1. merge source rows into the target schema
              2. (optional) overlay source art, re-wrapping .omod envelopes
-             3. rebuild the data pack + repack the IPA
+             3. rebuild the data pack + repack the package
              4. verify: only the pack changed, binary untouched, entry counts stable
     output = output.pkg           (unsigned; sideload to re-sign)
 
-    python tools/build_package.py --ipa base.pkg --assets old/assets --out output.pkg
+    python tools/build_package.py --base base.pkg --assets old/assets --out output.pkg
     python tools/build_package.py ... --art          # also take source models/textures/sounds
 """
 from __future__ import annotations
@@ -102,22 +102,22 @@ def verify(base_path: str, out_path: str) -> bool:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="rebuild a package from an older asset tree")
-    ap.add_argument("--ipa", required=True, help="base package")
+    ap.add_argument("--base", required=True, help="base package")
     ap.add_argument("--assets", required=True, help="old/assets")
-    ap.add_argument("--out", required=True, help="output IPA")
+    ap.add_argument("--out", required=True, help="output package")
     ap.add_argument("--art", action="store_true", help="also overlay source art assets")
     ap.add_argument("--no-verify", action="store_true")
     args = ap.parse_args(argv)
 
-    if not os.path.isfile(args.ipa):
-        print(f"missing input IPA: {args.ipa}", file=sys.stderr)
+    if not os.path.isfile(args.base):
+        print(f"missing input package: {args.base}", file=sys.stderr)
         return 2
     if not os.path.isdir(args.assets):
         print(f"missing assets dir: {args.assets}", file=sys.stderr)
         return 2
 
     merge = load_merge_module()
-    merge_args = [args.ipa, args.assets, args.out]
+    merge_args = [args.base, args.assets, args.out]
     if args.art:
         merge_args.append("--overlay-art")
 
@@ -128,8 +128,8 @@ def main(argv: list[str]) -> int:
 
     if not args.no_verify:
         print("\n== 2/2 verify ==")
-        if not verify(args.ipa, args.out):
-            print("\nverification failed — do not ship this IPA", file=sys.stderr)
+        if not verify(args.base, args.out):
+            print("\nverification failed — do not ship this package", file=sys.stderr)
             return 1
 
     size = os.path.getsize(args.out) / 1048576

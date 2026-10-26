@@ -212,7 +212,7 @@ def merge_table(new_text: str, old_text: str) -> tuple[str, int, int]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("ipa", help="base package")
+    ap.add_argument("base", help="base package")
     ap.add_argument("assets", help="source asset tree")
     ap.add_argument("out")
     ap.add_argument("--size-match", action="store_true",
@@ -223,7 +223,7 @@ def main(argv: list[str]) -> int:
                     help="also take textures/models/worlds from the source tree")
     args = ap.parse_args(argv)
 
-    with zipfile.ZipFile(args.ipa) as zin:
+    with zipfile.ZipFile(args.base) as zin:
         pack_name = _pack_entry(zin)
         pack_raw = zin.read(pack_name)
         new_pack = zipfile.ZipFile(io.BytesIO(pack_raw))
@@ -277,7 +277,7 @@ def main(argv: list[str]) -> int:
     pack = buf.getvalue()
     print(f"data pack rebuilt: {len(pack) / 1048576:.1f} MB, {len(entries)} entries")
 
-    with zipfile.ZipFile(args.ipa) as zin, zipfile.ZipFile(args.out, "w", zipfile.ZIP_DEFLATED,
+    with zipfile.ZipFile(args.base) as zin, zipfile.ZipFile(args.out, "w", zipfile.ZIP_DEFLATED,
                                                           compresslevel=6) as zout:
         for item in zin.infolist():
             if item.filename == pack_name:

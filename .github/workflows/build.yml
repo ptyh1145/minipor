@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       base:
-        description: "本机路径：基础包（zip/ipa）"
+        description: "本机路径：基础包（zip/pkg）"
         required: true
         default: "H:\\inputs\\base.pkg"
       assets:
@@ -58,7 +58,7 @@ jobs:
               python tools/table_merge.py "${{ inputs.base }}" "${{ inputs.assets }}" $target --overlay-art
             }
             default {
-              python tools/build_package.py --ipa "${{ inputs.base }}" --assets "${{ inputs.assets }}" --out $target
+              python tools/build_package.py --base "${{ inputs.base }}" --assets "${{ inputs.assets }}" --out $target
             }
           }
           if (-not (Test-Path $target)) { throw "build produced nothing" }
