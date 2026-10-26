@@ -21,3 +21,14 @@ if (MSVC)
 else()
     target_compile_options(terrain_check PRIVATE -O2 -w)
 endif()
+
+add_executable(player_check player_check.cpp
+    ../ios/core/src/player.cpp
+    ../ios/core/src/terrain.cpp
+    ../ios/core/src/assets_bin.cpp)
+target_include_directories(player_check PRIVATE ../ios/core/include)
+if (MSVC)
+    target_compile_options(player_check PRIVATE /O2 /w)
+else()
+    target_compile_options(player_check PRIVATE -O2 -w)
+endif()

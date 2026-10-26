@@ -12,6 +12,7 @@ add_library(mw_core STATIC
     core/src/world.cpp
     core/src/terrain.cpp
     core/src/assets_bin.cpp
+    core/src/player.cpp
 )
 target_include_directories(mw_core PUBLIC core/include)
 target_compile_options(mw_core PRIVATE -Wall -Wextra)
