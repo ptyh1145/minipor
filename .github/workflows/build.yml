@@ -1,4 +1,4 @@
-name: build
+﻿name: build
 
 # 在自托管 runner（自己的电脑）上构建。
 # 输入文件留在本机磁盘，工作流只读取路径；产物写回本机目录，不上传任何输入。
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Check inputs exist locally
-        shell: pwsh
+        shell: powershell
         run: |
           $base   = "${{ inputs.base }}"
           $assets = "${{ inputs.assets }}"
@@ -42,7 +42,7 @@ jobs:
           (Get-ChildItem -Recurse -File $assets | Measure-Object).Count
 
       - name: Build
-        shell: pwsh
+        shell: powershell
         run: |
           $out = "${{ inputs.out_dir }}"
           New-Item -ItemType Directory -Path $out -Force | Out-Null
@@ -62,7 +62,7 @@ jobs:
           Write-Host ("done: {0} ({1:N1} MB)" -f $target, ((Get-Item $target).Length / 1MB))
 
       - name: Trim old builds (keep last 2)
-        shell: pwsh
+        shell: powershell
         run: |
           $out = "${{ inputs.out_dir }}"
           Get-ChildItem $out -Filter "*.pkg" | Sort-Object LastWriteTime -Descending |
