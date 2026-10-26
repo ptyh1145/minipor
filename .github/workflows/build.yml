@@ -1,7 +1,12 @@
 name: build
 
-# 在自托管 runner（自己的电脑）上构建。
+# 在自托管 runner（自己的电脑）上构建成品包。
 # 输入文件留在本机磁盘，工作流只读取路径；产物写回本机目录，不上传任何输入。
+#
+# mode:
+#   merge   —— 只合并数据表（最小改动）
+#   assets  —— 合并 + 覆盖资源（贴图/音效/模型）
+#   oldonly —— assets + 删除目标端独有的行并清理引用
 
 on:
   workflow_dispatch:
@@ -11,17 +16,21 @@ on:
         required: false
         default: "H:\\inputs\\base.pkg"
       assets:
-        description: "本机路径：来源资源目录（含 assets/）"
+        description: "本机路径：源资源目录（含 assets/）"
         required: false
-        default: "H:\\inputs\\assets"
+        default: "H:\\inputs\\assets_clean"
+      source_pkg:
+        description: "本机路径：源 APK（oldonly/assets 模式用）"
+        required: false
+        default: "H:\\inputs\\source.apk"
       out_dir:
         description: "本机输出目录"
         required: false
         default: "H:\\output"
-      overlay:
-        description: "附加：none | sound | tex"
+      mode:
+        description: "merge | assets | oldonly"
         required: false
-        default: "none"
+        default: "oldonly"
   push:
     branches: [main]
     paths:
@@ -29,44 +38,44 @@ on:
       - ".github/workflows/build.yml"
 
 env:
-  # push 触发时 inputs 为空，这里给出默认值
   MW_BASE: ${{ inputs.base || 'H:\inputs\base.pkg' }}
-  MW_ASSETS: ${{ inputs.assets || 'H:\inputs\assets' }}
+  MW_ASSETS: ${{ inputs.assets || 'H:\inputs\assets_clean' }}
+  MW_SOURCE: ${{ inputs.source_pkg || 'H:\inputs\source.apk' }}
   MW_OUT: ${{ inputs.out_dir || 'H:\output' }}
-  MW_OVERLAY: ${{ inputs.overlay || 'none' }}
+  MW_MODE: ${{ inputs.mode || 'oldonly' }}
 
 jobs:
   build:
-    # 需要先在这台机器上注册 runner，标签保持默认（self-hosted / Windows / X64）
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check inputs exist locally
+      - name: Show inputs
         shell: powershell
         run: |
           Write-Host "base    : $env:MW_BASE"
           Write-Host "assets  : $env:MW_ASSETS"
+          Write-Host "source  : $env:MW_SOURCE"
           Write-Host "out     : $env:MW_OUT"
-          Write-Host "overlay : $env:MW_OVERLAY"
-          if (-not (Test-Path $env:MW_BASE))   { throw "base package not found: $env:MW_BASE" }
-          if (-not (Test-Path $env:MW_ASSETS)) { throw "asset tree not found: $env:MW_ASSETS" }
-          "asset files: " + (Get-ChildItem -Recurse -File $env:MW_ASSETS | Measure-Object).Count
+          Write-Host "mode    : $env:MW_MODE"
+          foreach ($p in @($env:MW_BASE, $env:MW_ASSETS, $env:MW_SOURCE)) {
+            Write-Host ("  {0} exists={1}" -f $p, (Test-Path $p))
+          }
 
       - name: Build
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path $env:MW_OUT -Force | Out-Null
           $target = Join-Path $env:MW_OUT "output.pkg"
-          switch ($env:MW_OVERLAY) {
-            "sound" {
-              python tools/table_merge.py $env:MW_BASE $env:MW_ASSETS $target --overlay-art --art-ext ogg
+          switch ($env:MW_MODE) {
+            "merge" {
+              python tools/build_package.py --base $env:MW_BASE --assets $env:MW_ASSETS --out $target
             }
-            "tex" {
+            "assets" {
               python tools/table_merge.py $env:MW_BASE $env:MW_ASSETS $target --overlay-art
             }
             default {
-              python tools/build_package.py --base $env:MW_BASE --assets $env:MW_ASSETS --out $target
+              python tools/build_bundle.py $env:MW_BASE $env:MW_SOURCE $target
             }
           }
           if (-not (Test-Path $target)) { throw "build produced nothing" }
@@ -77,5 +86,3 @@ jobs:
         run: |
           Get-ChildItem $env:MW_OUT -Filter "*.pkg" | Sort-Object LastWriteTime -Descending |
             Select-Object -Skip 2 | Remove-Item -Force -ErrorAction SilentlyContinue
-
-      # 不上传产物：输出留在本机 out_dir，避免把受版权保护的内容传到任何服务器
