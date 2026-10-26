@@ -1,8 +1,12 @@
 // Metal backend — iOS 11+, arm64.
-// Draws either the procedural fallback or real geometry from the data pack, with an
-// optional texture sampled through the vertex UVs.
+//
+// Draw order of preference:
+//   1. terrain from Documents/assets.bin  (packed textures + voxels + block table)
+//   2. real geometry from the data pack    (AssetModel)
+//   3. procedural fallback                 (cube + voxel cluster)
 #import "Backend.h"
 #import "AssetModel.h"
+#import "TerrainScene.h"
 #import "Log.h"
 
 #import <Metal/Metal.h>
@@ -12,6 +16,7 @@
 #include <vector>
 
 #include "geometry.h"
+#include "miniworld/assets_bin.h"
 
 static NSString *const kShaderSource = @R"METAL(
 #include <metal_stdlib>
@@ -24,6 +29,13 @@ struct Vertex {
     packed_float3 col;
 };
 
+struct TVertex {
+    packed_float3 pos;
+    packed_float2 uv;
+    float slice;
+    float shade;
+};
+
 struct Uniforms {
     float4x4 mvp;
     float useTex;
@@ -34,6 +46,13 @@ struct VOut {
     float3 nrm;
     float2 uv;
     float3 col;
+};
+
+struct TVOut {
+    float4 position [[position]];
+    float2 uv;
+    float slice;
+    float shade;
 };
 
 vertex VOut v_main(uint vid [[vertex_id]],
@@ -63,6 +82,25 @@ fragment float4 f_main(VOut in [[stage_in]],
     float rim = pow(1.0 - max(abs(n.z), 0.0), 3.0) * 0.18;
     return float4(c + rim, 1.0);
 }
+
+vertex TVOut tv_main(uint vid [[vertex_id]],
+                     device const TVertex *verts [[buffer(0)]],
+                     constant Uniforms &u [[buffer(1)]]) {
+    TVOut out;
+    TVertex v = verts[vid];
+    out.position = u.mvp * float4(v.pos, 1.0);
+    out.uv = v.uv;
+    out.slice = v.slice;
+    out.shade = v.shade;
+    return out;
+}
+
+fragment float4 tf_main(TVOut in [[stage_in]],
+                        texture2d_array<float> tex [[texture(0)]],
+                        sampler samp [[sampler(0)]]) {
+    float4 c = tex.sample(samp, in.uv, uint(in.slice + 0.5));
+    return float4(c.rgb * in.shade, 1.0);
+}
 )METAL";
 
 struct UniformsC {
@@ -75,6 +113,7 @@ struct UniformsC {
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) id<MTLCommandQueue> queue;
 @property(nonatomic, strong) id<MTLRenderPipelineState> pipeline;
+@property(nonatomic, strong) id<MTLRenderPipelineState> terrainPipeline;
 @property(nonatomic, strong) id<MTLDepthStencilState> depthState;
 @property(nonatomic, strong) id<MTLSamplerState> sampler;
 @property(nonatomic, strong) id<MTLTexture> texture;
@@ -82,6 +121,12 @@ struct UniformsC {
 @property(nonatomic, strong) id<MTLBuffer> sceneIndexBuffer;
 @property(nonatomic, assign) NSUInteger sceneIndexCount;
 @property(nonatomic, assign) BOOL sceneIsWorld;
+@property(nonatomic, strong) id<MTLBuffer> terrainVertexBuffer;
+@property(nonatomic, strong) id<MTLBuffer> terrainIndexBuffer;
+@property(nonatomic, strong) id<MTLTexture> terrainTexture;
+@property(nonatomic, assign) NSUInteger terrainIndexCount;
+@property(nonatomic, assign) float terrainExtent;
+@property(nonatomic, assign) float terrainHeight;
 @property(nonatomic, assign) double startTime;
 @end
 
@@ -111,6 +156,7 @@ struct UniformsC {
         MWLog(@"shader compile failed: %@", error);
         return view;
     }
+
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
     pd.vertexFunction = [lib newFunctionWithName:@"v_main"];
     pd.fragmentFunction = [lib newFunctionWithName:@"f_main"];
@@ -118,6 +164,14 @@ struct UniformsC {
     pd.depthAttachmentPixelFormat = view.depthStencilPixelFormat;
     self.pipeline = [self.device newRenderPipelineStateWithDescriptor:pd error:&error];
     if (!self.pipeline) MWLog(@"pipeline failed: %@", error);
+
+    MTLRenderPipelineDescriptor *td = [MTLRenderPipelineDescriptor new];
+    td.vertexFunction = [lib newFunctionWithName:@"tv_main"];
+    td.fragmentFunction = [lib newFunctionWithName:@"tf_main"];
+    td.colorAttachments[0].pixelFormat = view.colorPixelFormat;
+    td.depthAttachmentPixelFormat = view.depthStencilPixelFormat;
+    self.terrainPipeline = [self.device newRenderPipelineStateWithDescriptor:td error:&error];
+    if (!self.terrainPipeline) MWLog(@"terrain pipeline failed: %@", error);
 
     MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
     dd.depthCompareFunction = MTLCompareFunctionLess;
@@ -127,53 +181,97 @@ struct UniformsC {
     MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
     sd.minFilter = MTLSamplerMinMagFilterNearest;
     sd.magFilter = MTLSamplerMinMagFilterNearest;
-    sd.sAddressMode = MTLSamplerAddressModeRepeat;
-    sd.tAddressMode = MTLSamplerAddressModeRepeat;
+    sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
+    sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
     self.sampler = [self.device newSamplerStateWithDescriptor:sd];
 
-    MWModelData *scene = MWLoadScene();
-    mw::MeshBuffer fallback;
-    const mw::MeshBuffer *mesh = nullptr;
-    if (scene && scene.vertexCount > 0) {
-        mesh = [scene buffer];
-        self.sceneIsWorld = scene.isWorld;
-    } else {
-        auto cube = mw::buildCube(0, 0, 0, 0.62f);
-        auto voxels = mw::buildVoxelCluster();
-        fallback.vertices = cube;
-        fallback.vertices.insert(fallback.vertices.end(), voxels.begin(), voxels.end());
-        for (std::uint32_t i = 0; i < fallback.vertices.size(); ++i) fallback.indices.push_back(i);
-        mesh = &fallback;
+    // ---- 1. terrain ------------------------------------------------------
+    [self prepareTerrain];
+
+    // ---- 2/3. packed model or procedural fallback ------------------------
+    if (self.terrainIndexCount == 0) {
+        MWModelData *scene = MWLoadScene();
+        mw::MeshBuffer fallback;
+        const mw::MeshBuffer *mesh = nullptr;
+        if (scene && scene.vertexCount > 0) {
+            mesh = [scene buffer];
+            self.sceneIsWorld = scene.isWorld;
+        } else {
+            auto cube = mw::buildCube(0, 0, 0, 0.62f);
+            auto voxels = mw::buildVoxelCluster();
+            fallback.vertices = cube;
+            fallback.vertices.insert(fallback.vertices.end(), voxels.begin(), voxels.end());
+            for (std::uint32_t i = 0; i < fallback.vertices.size(); ++i) fallback.indices.push_back(i);
+            mesh = &fallback;
+        }
+        self.sceneIndexCount = mesh->indices.size();
+        self.sceneBuffer = [self.device newBufferWithBytes:mesh->vertices.data()
+                                                    length:mesh->vertices.size() * sizeof(mw::MeshVertex)
+                                                   options:MTLResourceStorageModeShared];
+        self.sceneIndexBuffer = [self.device newBufferWithBytes:mesh->indices.data()
+                                                         length:mesh->indices.size() * sizeof(std::uint32_t)
+                                                        options:MTLResourceStorageModeShared];
+        MWLog(@"fallback scene: %lu indices", (unsigned long)self.sceneIndexCount);
     }
 
-    self.sceneIndexCount = mesh->indices.size();
-    self.sceneBuffer = [self.device newBufferWithBytes:mesh->vertices.data()
-                                                length:mesh->vertices.size() * sizeof(mw::MeshVertex)
-                                               options:MTLResourceStorageModeShared];
-    self.sceneIndexBuffer = [self.device newBufferWithBytes:mesh->indices.data()
-                                                     length:mesh->indices.size() * sizeof(std::uint32_t)
-                                                    options:MTLResourceStorageModeShared];
-
-    if (scene && scene.textureRGBA.length > 0) {
-        MTLTextureDescriptor *td = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                         width:scene.texWidth
-                                        height:scene.texHeight
-                                     mipmapped:NO];
-        td.usage = MTLTextureUsageShaderRead;
-        self.texture = [self.device newTextureWithDescriptor:td];
-        [self.texture replaceRegion:MTLRegionMake2D(0, 0, scene.texWidth, scene.texHeight)
-                        mipmapLevel:0
-                          withBytes:scene.textureRGBA.bytes
-                        bytesPerRow:scene.texWidth * 4];
-        MWLog(@"texture bound: %lux%lu", (unsigned long)scene.texWidth,
-              (unsigned long)scene.texHeight);
-    }
-
-    MWLog(@"MWBackendMetal ready: world=%d indices=%lu verts=%lu tex=%d",
-          self.sceneIsWorld ? 1 : 0, (unsigned long)self.sceneIndexCount,
-          (unsigned long)mesh->vertices.size(), self.texture ? 1 : 0);
+    MWLog(@"MWBackendMetal ready: terrain=%d indices=%lu pipeline=%d",
+          self.terrainIndexCount > 0 ? 1 : 0, (unsigned long)self.terrainIndexCount,
+          self.terrainPipeline ? 1 : 0);
     return view;
+}
+
+- (void)prepareTerrain {
+    MWTerrain *terrain = MWLoadTerrainFromDocuments();
+    if (!terrain || terrain.indexCount == 0 || !terrain.textureArray.length) return;
+    if (!self.terrainPipeline) {
+        MWLog(@"terrain pipeline unavailable, keeping fallback");
+        return;
+    }
+
+    self.terrainIndexCount = terrain.indexCount;
+    self.terrainVertexBuffer = [self.device newBufferWithBytes:[terrain vertices]
+                                                       length:terrain.vertexCount * sizeof(MWVertex)
+                                                      options:MTLResourceStorageModeShared];
+    self.terrainIndexBuffer = [self.device newBufferWithBytes:[terrain indices]
+                                                      length:terrain.indexCount * sizeof(std::uint32_t)
+                                                     options:MTLResourceStorageModeShared];
+
+    MTLTextureDescriptor *desc = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                     width:terrain.sliceSize
+                                    height:terrain.sliceSize
+                                 mipmapped:NO];
+    desc.textureType = MTLTextureType2DArray;
+    desc.arrayLength = terrain.sliceCount;
+    desc.usage = MTLTextureUsageShaderRead;
+    self.terrainTexture = [self.device newTextureWithDescriptor:desc];
+
+    const NSUInteger sliceBytes = terrain.sliceSize * terrain.sliceSize * 4;
+    const std::uint8_t *base = (const std::uint8_t *)terrain.textureArray.bytes;
+    for (NSUInteger i = 0; i < terrain.sliceCount; ++i) {
+        [self.terrainTexture replaceRegion:MTLRegionMake3D(0, 0, i, terrain.sliceSize,
+                                                          terrain.sliceSize, 1)
+                               mipmapLevel:0
+                                     slice:i
+                                 withBytes:base + i * sliceBytes
+                               bytesPerRow:terrain.sliceSize * 4
+                             bytesPerImage:sliceBytes];
+    }
+
+    // camera framing from the label's world size
+    NSArray<NSString *> *parts = [terrain.label componentsSeparatedByString:@" "];
+    float extent = 96.f, height = 48.f;
+    if (parts.count >= 2) {
+        NSArray<NSString *> *dims = [parts.lastObject componentsSeparatedByString:@"x"];
+        if (dims.count == 3) {
+            extent = (float)[dims[0] floatValue];
+            height = (float)[dims[1] floatValue];
+        }
+    }
+    self.terrainExtent = extent;
+    self.terrainHeight = height;
+    MWLog(@"terrain uploaded: %@ slices=%lu extent=%.0f", terrain.label,
+          (unsigned long)terrain.sliceCount, extent);
 }
 
 - (void)start {
@@ -184,7 +282,9 @@ struct UniformsC {
 }
 
 - (void)drawInMTKView:(MTKView *)view {
-    if (!self.pipeline || self.sceneIndexCount == 0) return;
+    const BOOL useTerrain = self.terrainIndexCount > 0 && self.terrainTexture;
+    if (!useTerrain && (!self.pipeline || self.sceneIndexCount == 0)) return;
+
     id<MTLCommandBuffer> cb = [self.queue commandBuffer];
     MTLRenderPassDescriptor *rp = view.currentRenderPassDescriptor;
     if (!rp) {
@@ -194,15 +294,40 @@ struct UniformsC {
     const float t = (float)(CACurrentMediaTime() - self.startTime);
 
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
-    [enc setRenderPipelineState:self.pipeline];
     [enc setDepthStencilState:self.depthState];
     [enc setCullMode:MTLCullModeBack];
     [enc setFrontFacingWinding:MTLWindingCounterClockwise];
 
     const float aspect = (float)view.drawableSize.width / (float)view.drawableSize.height;
-    mw::Mat4 proj = mw::matPerspective(60.0f * (float)M_PI / 180.0f, aspect, 0.1f, 400.0f);
+    mw::Mat4 proj = mw::matPerspective(60.0f * (float)M_PI / 180.0f, aspect, 0.1f, 600.0f);
 
-    // World: look at the chunk from a fixed isometric-ish angle and rotate slowly.
+    if (useTerrain) {
+        const float extent = self.terrainExtent > 1.f ? self.terrainExtent : 96.f;
+        const float height = self.terrainHeight > 1.f ? self.terrainHeight : 48.f;
+        mw::Mat4 view4 = mw::matTranslation(0, -height * 0.55f, -extent * 1.35f);
+        mw::Mat4 rot = mw::matMul(mw::matRotationY(0.6f + t * 0.10f), mw::matRotationX(0.55f));
+
+        UniformsC u{};
+        const mw::Mat4 mvp = mw::matMul(proj, mw::matMul(view4, rot));
+        for (int i = 0; i < 16; ++i) u.mvp[i] = mvp.m[i];
+
+        [enc setRenderPipelineState:self.terrainPipeline];
+        [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
+        [enc setVertexBuffer:self.terrainVertexBuffer offset:0 atIndex:0];
+        [enc setFragmentTexture:self.terrainTexture atIndex:0];
+        [enc setFragmentSamplerState:self.sampler atIndex:0];
+        [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                        indexCount:self.terrainIndexCount
+                         indexType:MTLIndexTypeUInt32
+                       indexBuffer:self.terrainIndexBuffer
+                 indexBufferOffset:0];
+        [enc endEncoding];
+        [cb presentDrawable:view.currentDrawable];
+        [cb commit];
+        return;
+    }
+
+    [enc setRenderPipelineState:self.pipeline];
     const float distance = self.sceneIsWorld ? 78.0f : 3.0f;
     const float height = self.sceneIsWorld ? -30.0f : 0.0f;
     mw::Mat4 view4 = mw::matTranslation(0, height, -distance);
