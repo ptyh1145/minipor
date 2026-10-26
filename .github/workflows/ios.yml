@@ -1,0 +1,52 @@
+name: ios
+
+# 在 GitHub 的云端 macOS runner 上编译 iOS App（本机不需要 Mac）。
+# 只编译代码，不接触任何游戏资源；产物是未签名 IPA，用 Sideloadly 侧载。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+
+jobs:
+  build:
+    name: build unsigned app
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (arm64, no signing)
+        run: |
+          cmake -S ios -B build-ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO
+
+      - name: Build
+        run: cmake --build build-ios --config Release --target mini_port_app
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP=$(find build-ios -name "*.app" -maxdepth 5 | head -1)
+          if [ -z "${APP:-}" ]; then
+            echo "app bundle not found"; find build-ios -name "*.app" -maxdepth 6; exit 1
+          fi
+          echo "app: $APP"
+          lipo -info "$APP"/* 2>/dev/null | head -3 || true
+          rm -rf Payload app.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry app.ipa Payload
+          ls -lh app.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-app-ipa
+          path: app.ipa
+          if-no-files-found: error
