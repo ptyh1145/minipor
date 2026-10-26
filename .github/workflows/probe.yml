@@ -1,0 +1,20 @@
+name: macos-probe
+
+# 最小可行性探针：只跑一条 echo，用来判断这台账号能不能拿到托管 macOS runner。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/probe.yml"
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    steps:
+      - name: hello
+        run: |
+          uname -a
+          xcodebuild -version || true
+          echo "macos runner ok"
