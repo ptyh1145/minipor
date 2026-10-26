@@ -1,4 +1,4 @@
-﻿name: native
+name: native
 
 # 编译 C++ 预览渲染器与地形核心校验工具（无第三方依赖）。
 # 资源在运行时由本地提供，构建过程不接触任何游戏文件。
@@ -33,52 +33,7 @@ jobs:
             & $e.FullName *> $null
             Write-Host ("{0}: {1:N0} KB, exit {2}" -f $e.Name, ($e.Length / 1KB), $LASTEXITCODE)
           }
-          if (-not ($exes | Where-Object { name: native
-
-# 编译 C++ 预览渲染器与地形核心校验工具（无第三方依赖）。
-# 资源在运行时由本地提供，构建过程不接触任何游戏文件。
-
-on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "native/**"
-      - "ios/core/**"
-      - ".github/workflows/native.yml"
-
-jobs:
-  build:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure
-        run: cmake -S native -B build-native -A x64
-
-      - name: Build
-        run: cmake --build build-native --config Release
-
-      - name: Smoke test
-        shell: powershell
-        run: |
-          $exes = Get-ChildItem -Recurse build-native -Filter *.exe
-          if (-not $exes) { throw "no executable produced" }
-          foreach ($e in $exes) {
-            Write-Host ("--- {0} ({1:N0} KB)" -f $e.Name, ($e.Length / 1KB))
-            & $e.FullName | Select-Object -First 2
-            Write-Host ("exit: {0}" -f $LASTEXITCODE)
-          }
           if (-not ($exes | Where-Object { $_.Name -eq "preview.exe" })) { throw "preview.exe missing" }
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: native-tools
-          path: |
-            build-native/**/preview.exe
-            build-native/**/terrain_check.exe
-          if-no-files-found: error
-.Name -eq "preview.exe" })) { throw "preview.exe missing" }
 
       - uses: actions/upload-artifact@v4
         with:
