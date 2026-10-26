@@ -1,4 +1,4 @@
-name: ios
+﻿name: ios
 
 # 在 GitHub 的云端 macOS runner 上编译 iOS App（本机不需要 Mac）。
 # 只编译代码，不接触任何游戏资源；产物是未签名 IPA，用 Sideloadly 侧载。
@@ -14,7 +14,7 @@ on:
 jobs:
   build:
     name: build unsigned app
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
